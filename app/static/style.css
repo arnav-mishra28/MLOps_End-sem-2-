@@ -347,6 +347,14 @@ main {
   white-space: nowrap;
 }
 
+.score-pill.score-zero {
+  background: #dc2626;
+}
+
+.score-pill.score-low {
+  background: #d97706;
+}
+
 .eval-feedback {
   font-size: 0.85rem;
   color: #166534;

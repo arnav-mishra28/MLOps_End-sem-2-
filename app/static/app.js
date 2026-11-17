@@ -154,11 +154,13 @@ function addHistoryItem(qNum, qText, answer, score, feedback) {
   const item = document.createElement("div");
   item.className = "history-item";
 
+  const pillClass = score === 0 ? "score-pill score-zero" : (score < 6 ? "score-pill score-low" : "score-pill");
+
   item.innerHTML = `
     <div class="history-q"><strong>Q${qNum}:</strong> ${escapeHtml(qText)}</div>
     <div class="history-a"><strong>Your Answer:</strong> ${escapeHtml(answer)}</div>
     <div class="eval-box">
-      <span class="score-pill">Score: ${score}/10</span>
+      <span class="${pillClass}">Score: ${score}/10</span>
       <span class="eval-feedback">${escapeHtml(feedback)}</span>
     </div>
   `;

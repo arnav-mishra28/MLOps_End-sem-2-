@@ -64,7 +64,6 @@ def test_session_store_non_existent():
 
 def test_llm_service_offline_mode():
     service = LLMService()
-    # Force offline mode for deterministic testing of fallback engine
     service._gemini_client = None
 
     q1 = service.generate_first_question("Student X", "Python", "Easy")
@@ -80,8 +79,8 @@ def test_llm_service_offline_mode():
         student_answer="Mutable objects can be modified after creation like lists, whereas immutable objects cannot be modified like tuples.",
         conversation_history=[]
     )
-    assert 0.0 <= score <= 10.0
-    assert len(feedback) > 0
+    assert score >= 6.0
+    assert "Accurately" in feedback or "Solid" in feedback or "detail" in feedback or "core concepts" in feedback
     assert next_q is not None
 
     # At question 3, next_q should be None
@@ -90,11 +89,12 @@ def test_llm_service_offline_mode():
         subject="Python",
         difficulty="Easy",
         current_question_num=3,
-        current_question="Q3 text",
-        student_answer="Another good answer.",
+        current_question="What are list comprehensions in Python?",
+        student_answer="List comprehensions provide a concise way to create lists using expressions in brackets.",
         conversation_history=[]
     )
     assert next_q3 is None
+    assert score3 > 0.0
 
     report = service.generate_performance_report(
         student_name="Student X",
@@ -111,3 +111,56 @@ def test_llm_service_offline_mode():
     assert report["average_marks"] == 8.5
     assert len(report["overall_assessment"]) > 0
     assert len(report["areas_for_improvement"]) > 0
+
+
+def test_llm_service_relevance_and_evasive_check():
+    """Verify that unrelated or evasive answers receive 0.0 marks."""
+    service = LLMService()
+    service._gemini_client = None
+
+    question = "Explain the difference between mutable and immutable data types in Python."
+    subject = "Python"
+
+    # 1. Evasive: "I don't know"
+    is_rel, score, fb = service.check_relevance(question, subject, "I do not know")
+    assert is_rel is False
+    assert score == 0.0
+    assert "0/10" in fb
+
+    # 2. Evasive: "skip"
+    is_rel, score, fb = service.check_relevance(question, subject, "please skip this question")
+    assert is_rel is False
+    assert score == 0.0
+
+    # 3. Unrelated / Off-topic
+    is_rel, score, fb = service.check_relevance(question, subject, "The quick brown fox jumps over the lazy dog.")
+    assert is_rel is False
+    assert score == 0.0
+    assert "unrelated" in fb.lower()
+
+    # 4. Relevant answer
+    is_rel, score, fb = service.check_relevance(
+        question, subject,
+        "Mutable data types in Python such as lists and dicts can be modified after creation, while immutable types like tuples cannot."
+    )
+    assert is_rel is True
+    assert score >= 7.0
+
+
+def test_llm_service_zero_score_performance_report():
+    """Verify that a candidate who provided unrelated answers receives an appropriate assessment."""
+    service = LLMService()
+    service._gemini_client = None
+
+    report = service.generate_performance_report(
+        student_name="Unprepared Student",
+        subject="Python",
+        difficulty="Easy",
+        history=[
+            {"question_number": 1, "score": 0.0},
+            {"question_number": 2, "score": 0.0},
+            {"question_number": 3, "score": 0.0},
+        ]
+    )
+    assert report["average_marks"] == 0.0
+    assert "did not successfully answer" in report["overall_assessment"] or "unrelated" in report["overall_assessment"]

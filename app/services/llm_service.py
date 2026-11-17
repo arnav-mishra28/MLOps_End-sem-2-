@@ -78,6 +78,36 @@ SUBJECT_QUESTION_BANK = {
     }
 }
 
+STOPWORDS = {
+    'what', 'is', 'the', 'difference', 'between', 'how', 'does', 'explain', 'why',
+    'and', 'or', 'in', 'to', 'for', 'a', 'an', 'of', 'with', 'at', 'by', 'from',
+    'this', 'that', 'these', 'those', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did', 'giving', 'examples', 'each', 'could',
+    'would', 'should', 'can', 'about', 'such', 'into', 'which', 'their', 'there',
+    'some', 'when', 'where', 'also', 'just', 'more', 'less', 'very', 'over', 'under'
+}
+
+EVASIVE_PATTERNS = [
+    r'^(i\s+)?(do\s+not|don\'?t)\s+know',
+    r'^no\s+idea',
+    r'^(please\s+)?skip',
+    r'^pass$',
+    r'^idk$',
+    r'^dunno$',
+    r'^nothing$',
+    r'^n/?a$',
+    r'^no\s+answer',
+    r'^not\s+sure',
+    r'^i\s+have\s+no\s+(idea|clue)',
+    r'^can\'?t\s+answer',
+    r'^cannot\s+answer',
+    r'^left\s+blank',
+    r'^none$',
+    r'^asdf',
+    r'^qwerty',
+    r'^[a-z]{1,4}$'
+]
+
 
 class LLMService:
     def __init__(self):
@@ -104,17 +134,14 @@ class LLMService:
 
     def _clean_json_response(self, text: str) -> Dict[str, Any]:
         """Extract and parse JSON object from LLM response string."""
-        # Remove markdown code block markers
         cleaned = re.sub(r"^```json\s*", "", text.strip(), flags=re.MULTILINE)
         cleaned = re.sub(r"^```\s*$", "", cleaned.strip(), flags=re.MULTILINE)
         
-        # Try direct parse
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
             pass
 
-        # Search for first outermost JSON object
         match = re.search(r"(\{[\s\S]*\})", cleaned)
         if match:
             try:
@@ -162,8 +189,8 @@ class LLMService:
         conversation_history: List[Dict[str, Any]]
     ) -> Tuple[float, str, Optional[str]]:
         """
-        Evaluates the student's answer, gives a score out of 10, provides constructive feedback,
-        and generates the next question (or None if current_question_num is 3).
+        Evaluates the student's answer strictly based on its relevance to the current question.
+        If the answer is unrelated, evasive, or off-topic, assigns a score of 0.0 with appropriate feedback.
         """
         is_last_question = (current_question_num >= settings.TOTAL_QUESTIONS)
 
@@ -184,17 +211,25 @@ class LLMService:
                 )
 
                 prompt = (
-                    f"You are an expert university examiner conducting a technical viva examination.\n"
+                    f"You are an expert university examiner conducting an oral technical viva examination.\n"
                     f"Student Name: {student_name}\n"
                     f"Subject: {subject}\n"
                     f"Difficulty Level: {difficulty}\n\n"
                     f"Examination History so far:\n{history_str}\n\n"
                     f"Current Question ({current_question_num} of {settings.TOTAL_QUESTIONS}): {current_question}\n"
                     f"Student's Answer: {student_answer}\n\n"
-                    f"Task:\n"
-                    f"1. Evaluate the student's answer thoroughly for technical accuracy, clarity, and depth.\n"
-                    f"2. Assign an objective numerical score between 0.0 and 10.0 (e.g. 7.5, 9.0).\n"
-                    f"3. Provide constructive, precise feedback explaining what was correct and what was missing or incorrect.\n"
+                    f"STRICT EVALUATION CRITERIA (RELEVANCE FIRST):\n"
+                    f"1. MANDATORY RELEVANCE CHECK:\n"
+                    f"   - Check if the student's response is directly addressing the technical question asked above.\n"
+                    f"   - If the student provided: empty answer, evasive phrases (e.g. 'I don't know', 'skip', 'idk', 'no clue', 'pass'), off-topic text, gibberish, or text completely unrelated to '{current_question}':\n"
+                    f"     -> ASSIGN A SCORE OF 0.0 OUT OF 10.\n"
+                    f"     -> In 'feedback', explicitly state that the answer is completely unrelated to the question or skipped.\n"
+                    f"   - Do NOT give any partial marks for unrelated text, regardless of length.\n"
+                    f"2. TECHNICAL MERIT (ONLY IF RELEVANT):\n"
+                    f"   - If and only if the answer is relevant, evaluate technical accuracy, conceptual correctness, depth, and clarity.\n"
+                    f"   - Assign an objective numerical score between 1.0 and 10.0.\n"
+                    f"3. FEEDBACK:\n"
+                    f"   - Provide concise, constructive feedback explaining what was correct, incorrect, or missing.\n"
                     f"4. {next_q_instruction}\n\n"
                     f"Respond ONLY with a valid JSON object in this exact schema (no markdown, no extra commentary):\n"
                     f"{{\n"
@@ -210,9 +245,9 @@ class LLMService:
                 )
                 parsed = self._clean_json_response(response.text)
                 
-                raw_score = float(parsed.get("score", 7.0))
+                raw_score = float(parsed.get("score", 0.0))
                 score = max(0.0, min(10.0, round(raw_score, 1)))
-                feedback = str(parsed.get("feedback", "Good explanation with relevant technical points.")).strip()
+                feedback = str(parsed.get("feedback", "Evaluation completed.")).strip()
                 next_q = parsed.get("next_question")
                 if is_last_question or not next_q:
                     next_q = None
@@ -269,8 +304,8 @@ class LLMService:
                     f"Complete Viva Transcript:\n{full_transcript}\n\n"
                     f"Task: Generate a final performance evaluation report.\n"
                     f"Provide:\n"
-                    f"1. 'overall_assessment': A thoughtful, encouraging, yet rigorous paragraph (3-5 sentences) summarizing the candidate's grasp of {subject}, technical maturity, and performance.\n"
-                    f"2. 'areas_for_improvement': A list of 2 to 4 concrete, actionable topics/concepts the student should review to advance further.\n\n"
+                    f"1. 'overall_assessment': A thoughtful, objective summary (3-5 sentences) summarizing the candidate's actual performance, technical depth, or lack of knowledge.\n"
+                    f"2. 'areas_for_improvement': A list of 2 to 4 concrete, actionable topics/concepts the student must study.\n\n"
                     f"Respond ONLY with a valid JSON object in this exact schema:\n"
                     f"{{\n"
                     f'  "overall_assessment": "<assessment text>",\n'
@@ -288,7 +323,7 @@ class LLMService:
                 if isinstance(areas, list) and areas:
                     areas = [str(a).strip() for a in areas if str(a).strip()]
                 else:
-                    areas = [f"Deepen architectural concepts in {subject}", "Provide more concrete real-world code/system examples"]
+                    areas = [f"Review foundational principles of {subject}", "Practice answering specific technical questions directly"]
 
                 if overall_assessment:
                     return {
@@ -313,6 +348,63 @@ class LLMService:
 
     # ------------------ Intelligent Offline / Fallback Mock Engine ------------------
 
+    def check_relevance(self, question: str, subject: str, answer: str) -> Tuple[bool, float, str]:
+        """
+        Validates if the student's answer is relevant to the question and subject.
+        Returns: (is_relevant, score, feedback)
+        """
+        clean = answer.strip().lower()
+
+        # 1. Evasive / Empty / No-knowledge check
+        for pat in EVASIVE_PATTERNS:
+            if re.search(pat, clean):
+                return False, 0.0, "No technical answer was provided (candidate skipped or indicated lack of knowledge). Score: 0/10."
+
+        # 2. Extract technical keywords from question and subject
+        q_words = set(re.findall(r'[a-zA-Z]{3,}', question.lower())) - STOPWORDS
+        sub_words = set(re.findall(r'[a-zA-Z]{3,}', subject.lower())) - STOPWORDS
+        target_keywords = q_words.union(sub_words)
+
+        ans_words = set(re.findall(r'[a-zA-Z]{3,}', clean)) - STOPWORDS
+
+        if not ans_words:
+            return False, 0.0, "The answer contains no substantive content. Score: 0/10."
+
+        # Direct overlap
+        overlap = target_keywords.intersection(ans_words)
+
+        # Stem / prefix matching (e.g. mutab -> mutable, mutability; optim -> optimize, optimization)
+        stem_overlap = set()
+        for kw in target_keywords:
+            prefix = kw[:4]
+            if any(w.startswith(prefix) for w in ans_words):
+                stem_overlap.add(kw)
+
+        effective_matches = overlap.union(stem_overlap)
+
+        # If zero relevant keywords from the question or subject are present in the answer
+        if not effective_matches:
+            return False, 0.0, "The submitted answer is completely unrelated to the question asked. Score: 0/10."
+
+        # Calculate score based on relevance coverage and explanation depth
+        match_count = len(effective_matches)
+        word_count = len(clean.split())
+
+        if match_count >= 3 and word_count >= 30:
+            score = 9.2
+            fb = "Outstanding, highly detailed response directly answering the question with strong technical accuracy."
+        elif match_count >= 2 and word_count >= 15:
+            score = 8.0
+            fb = "Solid explanation addressing the core concepts of the question accurately."
+        elif match_count >= 1 and word_count >= 8:
+            score = 6.5
+            fb = "Partially answered the question, but could elaborate further with more depth and technical specifics."
+        else:
+            score = 4.0
+            fb = "Mentioned relevant terms, but the answer lacks sufficient explanation and depth."
+
+        return True, score, fb
+
     def _mock_first_question(self, subject: str, difficulty: str) -> str:
         key = subject.strip().lower()
         diff = difficulty.capitalize() if difficulty.capitalize() in ("Easy", "Medium", "Hard") else "Medium"
@@ -330,25 +422,12 @@ class LLMService:
         current_question: str,
         student_answer: str
     ) -> Tuple[float, str, Optional[str]]:
-        clean_ans = student_answer.strip()
-        word_count = len(clean_ans.split())
-
-        # Heuristic scoring based on response quality
-        if word_count < 5:
-            score = 3.5
-            feedback = "The answer is overly brief and lacks technical depth, specific terminology, or supporting details."
-        elif word_count < 15:
-            score = 6.0
-            feedback = "Basic definition provided, but misses key underlying mechanics and trade-offs."
-        elif word_count < 35:
-            score = 7.5
-            feedback = "Solid explanation covering the essential principles with good conceptual accuracy."
-        elif word_count < 75:
-            score = 8.8
-            feedback = "Comprehensive and well-structured answer demonstrating strong technical mastery and practical insight."
-        else:
-            score = 9.5
-            feedback = "Exceptional, highly detailed response with thorough technical accuracy and clear conceptual clarity."
+        # Evaluate relevance strictly
+        is_relevant, score, feedback = self.check_relevance(
+            question=current_question,
+            subject=subject,
+            answer=student_answer
+        )
 
         # Check if next question is needed
         if current_question_num >= settings.TOTAL_QUESTIONS:
@@ -383,7 +462,6 @@ class LLMService:
         avg_marks: float
     ) -> Dict[str, Any]:
         if avg_marks >= 8.5:
-            grade = "Outstanding"
             assessment = (
                 f"{student_name} demonstrated exceptional technical proficiency and articulate communication during the viva in {subject} at {difficulty} level. "
                 f"The answers exhibited deep conceptual clarity, accurate terminology, and strong systematic problem-solving aptitude."
@@ -392,18 +470,16 @@ class LLMService:
                 f"Explore cutting-edge industry standards and recent RFCs/benchmarks in {subject}",
                 "Delve into advanced low-level internal optimizations and profiling techniques"
             ]
-        elif avg_marks >= 7.0:
-            grade = "Proficient"
+        elif avg_marks >= 6.0:
             assessment = (
                 f"{student_name} showcased a solid grasp of core {subject} principles at {difficulty} level. "
-                f"Most concepts were clearly articulated with sound understanding, though deeper elaboration on edge cases and design trade-offs will enhance mastery."
+                f"Concepts were clearly articulated with sound understanding, though deeper elaboration on edge cases and design trade-offs will enhance mastery."
             )
             improvements = [
                 f"Strengthen understanding of underlying operational trade-offs and edge-case handling in {subject}",
                 "Practice elaborating on real-world system architecture diagrams and production failure modes"
             ]
-        else:
-            grade = "Developing"
+        elif avg_marks > 0.0:
             assessment = (
                 f"{student_name} demonstrated foundational awareness in {subject}, but answers lacked sufficient technical depth and specificity. "
                 f"Reviewing core theoretical frameworks and hands-on implementations will significantly build viva confidence and knowledge retention."
@@ -412,6 +488,16 @@ class LLMService:
                 f"Revisit fundamental definitions, core algorithms, and foundational mechanics of {subject}",
                 "Conduct hands-on coding and lab exercises to reinforce practical conceptual linkages",
                 "Practice structured answers (Definition -> Internal Mechanism -> Real-world Trade-offs)"
+            ]
+        else:
+            assessment = (
+                f"{student_name} did not successfully answer the examination questions or provided unrelated responses during the viva in {subject} at {difficulty} level. "
+                f"A comprehensive review of the foundational syllabus and dedicated practice is required before retaking the examination."
+            )
+            improvements = [
+                f"Study the core syllabus and fundamental concepts of {subject} thoroughly",
+                "Focus on directly answering the technical questions asked during the examination",
+                "Practice answering technical viva questions without skipping"
             ]
 
         return {

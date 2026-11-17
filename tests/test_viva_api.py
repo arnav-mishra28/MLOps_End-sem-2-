@@ -234,3 +234,34 @@ def test_list_all_sessions(client: TestClient, mock_llm):
     student_names = [s["student_name"] for s in sessions]
     assert "Student A" in student_names
     assert "Student B" in student_names
+
+
+def test_submit_unrelated_answer_evaluates_zero_marks(client: TestClient):
+    """Test that submitting an off-topic or evasive answer evaluates to 0.0 score with feedback."""
+    start_res = client.post("/api/viva/start", json={
+        "student_name": "Test Student",
+        "subject": "Python",
+        "difficulty_level": "Easy"
+    })
+    session_id = start_res.json()["session_id"]
+
+    # Submit evasive answer
+    ans_res = client.post("/api/viva/submit-answer", json={
+        "session_id": session_id,
+        "answer": "I do not know anything about this topic."
+    })
+    assert ans_res.status_code == 200
+    data = ans_res.json()
+    assert data["score"] == 0.0
+    assert "0/10" in data["feedback"] or "unrelated" in data["feedback"].lower() or "skipped" in data["feedback"].lower()
+
+    # Submit off-topic / completely unrelated answer for Q2
+    ans_res2 = client.post("/api/viva/submit-answer", json={
+        "session_id": session_id,
+        "answer": "The weather today is cloudy and I like eating chocolate cake."
+    })
+    assert ans_res2.status_code == 200
+    data2 = ans_res2.json()
+    assert data2["score"] == 0.0
+    assert "unrelated" in data2["feedback"].lower() or "0/10" in data2["feedback"]
+
